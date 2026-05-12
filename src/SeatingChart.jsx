@@ -438,13 +438,15 @@ export default function SeatingChart() {
       <div
         onDragOver={e=>{
           e.preventDefault();
-          if(tableDrag){setTableDragOver(t.id);return;}
+          const isTableDrag = tableDrag || Array.from(e.dataTransfer.types || []).includes("application/x-table-id");
+          if(isTableDrag){setTableDragOver(t.id);return;}
           setDragOver(t.id);
         }}
         onDragLeave={()=>{setDragOver(null);setTableDragOver(null);}}
         onDrop={e=>{
           e.preventDefault();
-          if(tableDrag){moveTable(tableDrag,t.id);return;}
+          const draggedTableId = Number(e.dataTransfer.getData("application/x-table-id"));
+          if(tableDrag || draggedTableId){moveTable(tableDrag || draggedTableId,t.id);return;}
           drop(t.id);
         }}
         style={{
@@ -459,11 +461,17 @@ export default function SeatingChart() {
           <div style={{display:"flex",alignItems:"center",gap:6,minWidth:0}}>
             <span
               draggable
-              onDragStart={e=>{e.stopPropagation();e.dataTransfer.effectAllowed="move";setTableDrag(t.id);}}
+              onDragStart={e=>{
+                e.stopPropagation();
+                e.dataTransfer.effectAllowed="move";
+                e.dataTransfer.setData("application/x-table-id", String(t.id));
+                e.dataTransfer.setData("text/plain", `table-${t.id}`);
+                setTableDrag(t.id);
+              }}
               onDragEnd={()=>{setTableDrag(null);setTableDragOver(null);}}
-              title="Drag to move this table card"
-              style={{fontSize:14,cursor:"grab",color:"#9e8e83",lineHeight:1,userSelect:"none"}}
-            >↕</span>
+              title="Drag this handle onto another table to reorder"
+              style={{fontSize:17,cursor:"grab",color:"#7c6d64",lineHeight:1,userSelect:"none",padding:"2px 4px",border:"1px solid #e8e0d5",borderRadius:5,background:"#faf7f4"}}
+            >☰</span>
             {editT===t.id?(
               <input ref={editRef} value={editV} onChange={e=>setEditV(e.target.value)}
                 onBlur={commitEdit}
