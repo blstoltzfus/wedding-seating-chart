@@ -299,6 +299,7 @@ export default function SeatingChart() {
   const [loaded,setLoaded]     = useState(false);
   const saveRef  = useRef(null);
   const editRef  = useRef(null);
+  const importRef = useRef(null);
 
   useEffect(()=>{
     (async()=>{
@@ -395,7 +396,7 @@ export default function SeatingChart() {
     {setGuests(GUESTS.map(g=>({...g})));setTNames({});setTables(normalizeTables());}
   };
 
-  const copyAll=async()=>{
+  const seatingText=()=>{
     const lines=tables.flatMap(t=>{
       const gs=tGuests(t.id);
       return gs.length?[`${tName(t)} (${gs.length}/${t.cap}):`,
@@ -403,8 +404,57 @@ export default function SeatingChart() {
     });
     if(unassign.length){lines.push(`Unassigned (${unassign.length}):`,
       ...unassign.map(g=>`  ${g.name}`));}
-    await navigator.clipboard.writeText(lines.join("\n"));
+    return lines.join("\n");
+  };
+
+  const copyAll=async()=>{
+    await navigator.clipboard.writeText(seatingText());
     flash("Copied to clipboard!");
+  };
+
+  const exportChart=()=>{
+    const stamp = new Date().toISOString().slice(0,10);
+    const data = {
+      app:"wedding-seating-chart",
+      version:2,
+      exportedAt:new Date().toISOString(),
+      guests,
+      tNames,
+      tables,
+      seatingText:seatingText(),
+    };
+    const blob = new Blob([JSON.stringify(data,null,2)], {type:"application/json"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `wedding-seating-chart-${stamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    flash("Exported backup file");
+  };
+
+  const importChart=(e)=>{
+    const file = e.target.files?.[0];
+    if(!file)return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try{
+        const d = JSON.parse(String(reader.result||"{}"));
+        if(!Array.isArray(d.guests)) throw new Error("Missing guests");
+        setGuests(d.guests);
+        setTNames(d.tNames||{});
+        setTables(normalizeTables(d.tables));
+        setSelectedGuest(null);
+        flash("Imported seating chart");
+      }catch{
+        alert("Could not import that file. Make sure it is a seating chart JSON export from this app.");
+      }finally{
+        e.target.value = "";
+      }
+    };
+    reader.readAsText(file);
   };
 
   const Chip=({g,compact=false})=>{
@@ -557,6 +607,11 @@ export default function SeatingChart() {
           {toast&&<span style={{fontSize:12,color:"#b5945c",fontStyle:"italic"}}>{toast}</span>}
           <button onClick={copyAll} style={{padding:"5px 12px",borderRadius:6,border:"1px solid #e8e0d5",
             background:"#fff",cursor:"pointer",fontSize:12.5,color:"#2d2520"}}>Copy All</button>
+          <button onClick={exportChart} style={{padding:"5px 12px",borderRadius:6,border:"1px solid #b5945c",
+            background:"#fffaf0",cursor:"pointer",fontSize:12.5,color:"#7c5c21"}}>Export</button>
+          <button onClick={()=>importRef.current?.click()} style={{padding:"5px 12px",borderRadius:6,border:"1px solid #e8e0d5",
+            background:"#fff",cursor:"pointer",fontSize:12.5,color:"#2d2520"}}>Import</button>
+          <input ref={importRef} type="file" accept="application/json,.json" onChange={importChart} style={{display:"none"}} />
           <button onClick={reset} style={{padding:"5px 12px",borderRadius:6,border:"1px solid #e8e0d5",
             background:"#fff",cursor:"pointer",fontSize:12.5,color:"#9e8e83"}}>Reset</button>
         </div>
