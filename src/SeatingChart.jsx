@@ -206,12 +206,14 @@ const GUESTS = [
   {id:202,name:"Matt Wilson",group:"Wilson",rel:"Bennett's Friend",tableId:null},
 ];
 
-const TABLES = [
-  ...Array.from({length:18},(_,i)=>({id:i+1,name:`Table ${i+1}`,cap:8,section:"main"})),
-  {id:19,name:"Table 19",cap:9,section:"main"},
-  {id:20,name:"Table 20",cap:9,section:"main"},
-  {id:21,name:"Table 21",cap:6,section:"main"},
-  {id:22,name:"Table 22",cap:6,section:"main"},
+const DEFAULT_TABLES = [
+  ...Array.from({length:22},(_,i)=>{
+    const id = i + 1;
+    let cap = 8;
+    if(id===2 || id===3) cap = 6;
+    if(id===13 || id===19) cap = 9;
+    return {id,name:`Table ${id}`,cap,section:"main"};
+  }),
   {id:23,name:"Loft 1",cap:6,section:"loft"},
   {id:24,name:"Loft 2",cap:6,section:"loft"},
   {id:25,name:"Loft 3",cap:6,section:"loft"},
@@ -219,9 +221,27 @@ const TABLES = [
   {id:27,name:"Loft 5",cap:6,section:"loft"},
 ];
 
-const TOTAL_CAP = TABLES.reduce((s,t)=>s+t.cap,0);
 const RSVP_TOTAL = GUESTS.length;
-const OPEN_SEATS = TOTAL_CAP - RSVP_TOTAL;
+
+const normalizeTables = (savedTables) => {
+  if(!Array.isArray(savedTables)) return DEFAULT_TABLES.map(t=>({...t}));
+  const defaultsById = Object.fromEntries(DEFAULT_TABLES.map(t=>[t.id,t]));
+  const seen = new Set();
+  const ordered = savedTables
+    .filter(t=>defaultsById[t.id])
+    .map(t=>{
+      seen.add(t.id);
+      return {
+        ...defaultsById[t.id],
+        ...t,
+        cap: Math.max(1, Math.min(20, Number(t.cap)||defaultsById[t.id].cap)),
+      };
+    });
+  return [
+    ...ordered,
+    ...DEFAULT_TABLES.filter(t=>!seen.has(t.id)).map(t=>({...t})),
+  ];
+};
 
 const RS = {
   "Bennett's Family":        {bg:"#dbe4ff",tx:"#3b5bdb"},
@@ -264,10 +284,13 @@ const storage = {
 export default function SeatingChart() {
   const [guests,setGuests]     = useState(()=>GUESTS.map(g=>({...g})));
   const [tNames,setTNames]     = useState({});
+  const [tables,setTables]     = useState(()=>normalizeTables());
   const [search,setSearch]     = useState("");
   const [relF,setRelF]         = useState("");
   const [dragging,setDragging] = useState(null);
   const [dragOver,setDragOver] = useState(null);
+  const [tableDrag,setTableDrag] = useState(null);
+  const [tableDragOver,setTableDragOver] = useState(null);
   const [selectedGuest,setSelectedGuest] = useState(null);
   const [section,setSection]   = useState("main");
   const [editT,setEditT]       = useState(null);
@@ -281,7 +304,12 @@ export default function SeatingChart() {
     (async()=>{
       try {
         const r = await storage.get("seating-v1");
-        if(r?.value){const d=JSON.parse(r.value);if(d.guests)setGuests(d.guests);if(d.tNames)setTNames(d.tNames);}
+        if(r?.value){
+          const d=JSON.parse(r.value);
+          if(d.guests)setGuests(d.guests);
+          if(d.tNames)setTNames(d.tNames);
+          if(d.tables)setTables(normalizeTables(d.tables));
+        }
       } catch{}
       setLoaded(true);
     })();
@@ -291,14 +319,16 @@ export default function SeatingChart() {
     if(!loaded)return;
     clearTimeout(saveRef.current);
     saveRef.current=setTimeout(async()=>{
-      try{await storage.set("seating-v1",JSON.stringify({guests,tNames}));flash("Saved");}catch{}
+      try{await storage.set("seating-v1",JSON.stringify({guests,tNames,tables}));flash("Saved");}catch{}
     },900);
-  },[guests,tNames,loaded]);
+  },[guests,tNames,tables,loaded]);
 
   useEffect(()=>{if(editT&&editRef.current)editRef.current.focus();},[editT]);
 
   const flash=(m)=>{setToast(m);setTimeout(()=>setToast(""),1800);};
 
+  const totalCap  = tables.reduce((s,t)=>s+t.cap,0);
+  const openSeats = totalCap - RSVP_TOTAL;
   const seated    = guests.filter(g=>g.tableId!==null).length;
   const unassign  = guests.filter(g=>g.tableId===null);
   const filtered  = unassign.filter(g=>{
@@ -309,7 +339,31 @@ export default function SeatingChart() {
   const grouped   = filtered.reduce((a,g)=>{(a[g.group]=a[g.group]||[]).push(g);return a;},{});
   const tGuests   = (tid)=>guests.filter(g=>g.tableId===tid);
   const tName     = (t)=>tNames[t.id]||t.name;
-  const tableOf   = (id)=>TABLES.find(t=>t.id===id);
+  const tableOf   = (id)=>tables.find(t=>t.id===id);
+
+  const updateCap=(id,nextCap)=>{
+    const cap=Math.max(1,Math.min(20,Number(nextCap)||1));
+    const count=tGuests(id).length;
+    setTables(p=>p.map(t=>t.id===id?{...t,cap}:t));
+    if(count>cap)flash(`Table over capacity: ${count}/${cap}`);
+  };
+
+  const moveTable=(fromId,toId)=>{
+    if(!fromId||!toId||fromId===toId){setTableDrag(null);setTableDragOver(null);return;}
+    setTables(prev=>{
+      const from=prev.find(t=>t.id===fromId);
+      const to=prev.find(t=>t.id===toId);
+      if(!from||!to||from.section!==to.section)return prev;
+      const next=[...prev];
+      const fromIndex=next.findIndex(t=>t.id===fromId);
+      const [item]=next.splice(fromIndex,1);
+      const toIndex=next.findIndex(t=>t.id===toId);
+      next.splice(toIndex,0,item);
+      return next;
+    });
+    setTableDrag(null);
+    setTableDragOver(null);
+  };
 
   const moveGuest=(gid,toId)=>{
     const guest=guests.find(g=>g.id===gid);
@@ -338,11 +392,11 @@ export default function SeatingChart() {
 
   const reset=()=>{
     if(confirm("Clear all seating assignments?"))
-    {setGuests(GUESTS.map(g=>({...g})));setTNames({});}
+    {setGuests(GUESTS.map(g=>({...g})));setTNames({});setTables(normalizeTables());}
   };
 
   const copyAll=async()=>{
-    const lines=TABLES.flatMap(t=>{
+    const lines=tables.flatMap(t=>{
       const gs=tGuests(t.id);
       return gs.length?[`${tName(t)} (${gs.length}/${t.cap}):`,
         ...gs.map(g=>`  ${g.name}`),""]:[`${tName(t)}: (empty)`,""];
@@ -376,51 +430,83 @@ export default function SeatingChart() {
   const TCard=({t})=>{
     const gs=tGuests(t.id);
     const full=gs.length>=t.cap;
+    const overFull=gs.length>t.cap;
     const over=dragOver===t.id;
+    const tableOver=tableDragOver===t.id;
     const nm=tName(t);
     return(
       <div
-        onDragOver={e=>{e.preventDefault();setDragOver(t.id);}}
-        onDragLeave={()=>setDragOver(null)}
-        onDrop={()=>drop(t.id)}
+        onDragOver={e=>{
+          e.preventDefault();
+          if(tableDrag){setTableDragOver(t.id);return;}
+          setDragOver(t.id);
+        }}
+        onDragLeave={()=>{setDragOver(null);setTableDragOver(null);}}
+        onDrop={e=>{
+          e.preventDefault();
+          if(tableDrag){moveTable(tableDrag,t.id);return;}
+          drop(t.id);
+        }}
         style={{
           background:"#fff",
-          border:`1.5px solid ${over?"#b5945c":full?"#fca5a5":"#e8e0d5"}`,
+          border:`1.5px solid ${tableOver?"#64748b":over?"#b5945c":overFull?"#dc2626":full?"#fca5a5":"#e8e0d5"}`,
           borderRadius:10,padding:"10px 12px",
-          boxShadow:over?"0 0 0 3px rgba(181,148,92,.18)":"none",
+          boxShadow:tableOver?"0 0 0 3px rgba(100,116,139,.18)":over?"0 0 0 3px rgba(181,148,92,.18)":"none",
           transition:"border-color .12s,box-shadow .12s",
         }}
       >
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:5}}>
-          {editT===t.id?(
-            <input ref={editRef} value={editV} onChange={e=>setEditV(e.target.value)}
-              onBlur={commitEdit}
-              onKeyDown={e=>{if(e.key==="Enter")commitEdit();if(e.key==="Escape")setEditT(null);}}
-              style={{fontFamily:"Georgia,serif",fontWeight:"bold",fontSize:13,background:"none",border:"none",
-                borderBottom:"1.5px solid #b5945c",outline:"none",width:130,padding:"0 2px",color:"#2d2520"}}
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:5,gap:8}}>
+          <div style={{display:"flex",alignItems:"center",gap:6,minWidth:0}}>
+            <span
+              draggable
+              onDragStart={e=>{e.stopPropagation();e.dataTransfer.effectAllowed="move";setTableDrag(t.id);}}
+              onDragEnd={()=>{setTableDrag(null);setTableDragOver(null);}}
+              title="Drag to move this table card"
+              style={{fontSize:14,cursor:"grab",color:"#9e8e83",lineHeight:1,userSelect:"none"}}
+            >↕</span>
+            {editT===t.id?(
+              <input ref={editRef} value={editV} onChange={e=>setEditV(e.target.value)}
+                onBlur={commitEdit}
+                onKeyDown={e=>{if(e.key==="Enter")commitEdit();if(e.key==="Escape")setEditT(null);}}
+                style={{fontFamily:"Georgia,serif",fontWeight:"bold",fontSize:13,background:"none",border:"none",
+                  borderBottom:"1.5px solid #b5945c",outline:"none",width:120,padding:"0 2px",color:"#2d2520"}}
+              />
+            ):(
+              <button onDoubleClick={()=>{setEditT(t.id);setEditV(nm);}}
+                title="Double-click to rename"
+                style={{background:"none",border:"none",cursor:"pointer",padding:0,fontFamily:"Georgia,serif",
+                  fontWeight:"bold",fontSize:13,color:"#2d2520",textAlign:"left",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                {nm}
+              </button>
+            )}
+          </div>
+          <span style={{fontSize:11,fontWeight:600,padding:"2px 7px",borderRadius:20,whiteSpace:"nowrap",
+            background:overFull?"#fecaca":full?"#fee2e2":"#f5f0eb",color:overFull?"#991b1b":full?"#dc2626":"#7c6d64"}}>
+            {gs.length}/{t.cap}
+          </span>
+        </div>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:6,marginBottom:7}}>
+          {selectedGuest!==null&&!full?(<button onClick={()=>assignSelected(t.id)}
+            style={{fontSize:10.5,padding:"2px 6px",borderRadius:5,border:"1px solid #b5945c",background:"#fffaf0",color:"#7c5c21",cursor:"pointer"}}>
+            Seat here
+          </button>):<span/>}
+          <div style={{display:"flex",alignItems:"center",gap:3,fontSize:10.5,color:"#7c6d64"}}>
+            Seats
+            <button onClick={()=>updateCap(t.id,t.cap-1)} style={{width:20,height:20,borderRadius:4,border:"1px solid #e8e0d5",background:"#fff",cursor:"pointer",lineHeight:1}}>−</button>
+            <input
+              type="number"
+              min="1"
+              max="20"
+              value={t.cap}
+              onChange={e=>updateCap(t.id,e.target.value)}
+              style={{width:34,height:20,boxSizing:"border-box",border:"1px solid #e8e0d5",borderRadius:4,textAlign:"center",fontSize:11,color:"#2d2520",background:"#fff"}}
             />
-          ):(
-            <button onDoubleClick={()=>{setEditT(t.id);setEditV(nm);}}
-              title="Double-click to rename"
-              style={{background:"none",border:"none",cursor:"pointer",padding:0,fontFamily:"Georgia,serif",
-                fontWeight:"bold",fontSize:13,color:"#2d2520",textAlign:"left"}}>
-              {nm}
-            </button>
-          )}
-          <div style={{display:"flex",alignItems:"center",gap:5}}>
-            {selectedGuest!==null&&!full&&(<button onClick={()=>assignSelected(t.id)}
-              style={{fontSize:10.5,padding:"2px 6px",borderRadius:5,border:"1px solid #b5945c",background:"#fffaf0",color:"#7c5c21",cursor:"pointer"}}>
-              Seat here
-            </button>)}
-            <span style={{fontSize:11,fontWeight:600,padding:"2px 7px",borderRadius:20,
-              background:full?"#fee2e2":"#f5f0eb",color:full?"#dc2626":"#7c6d64"}}>
-              {gs.length}/{t.cap}
-            </span>
+            <button onClick={()=>updateCap(t.id,t.cap+1)} style={{width:20,height:20,borderRadius:4,border:"1px solid #e8e0d5",background:"#fff",cursor:"pointer",lineHeight:1}}>+</button>
           </div>
         </div>
         <div style={{height:2,background:"#f0ebe6",borderRadius:2,marginBottom:7}}>
-          <div style={{height:"100%",borderRadius:2,background:full?"#f87171":"#b5945c",
-            width:`${Math.min(100,gs.length/t.cap*100)}%`,transition:"width .2s"}}/>
+          <div style={{height:"100%",borderRadius:2,background:overFull?"#dc2626":full?"#f87171":"#b5945c",
+            width:`${Math.min(100,(gs.length/Math.max(1,t.cap))*100)}%`,transition:"width .2s"}}/>
         </div>
         <div style={{minHeight:28}}>
           {gs.map(g=><Chip key={g.id} g={g} compact/>)}
@@ -435,7 +521,7 @@ export default function SeatingChart() {
     );
   };
 
-  const vis=TABLES.filter(t=>t.section===section);
+  const vis=tables.filter(t=>t.section===section);
   const BT={display:"flex",alignItems:"center",padding:"9px 16px",background:"none",border:"none",
     borderBottom:"2.5px solid transparent",cursor:"pointer",fontSize:13,outline:"none"};
 
@@ -450,14 +536,14 @@ export default function SeatingChart() {
           💍 Seating Chart
         </span>
         <span style={{fontSize:12,padding:"3px 9px",background:"#f5f0eb",borderRadius:20,
-          color:"#7c6d64",border:"1px solid #e8e0d5"}}>{seated}/{TOTAL_CAP} seated</span>
+          color:"#7c6d64",border:"1px solid #e8e0d5"}}>{seated}/{totalCap} seated</span>
         <span style={{fontSize:12,padding:"3px 9px",background:"#f5f0eb",borderRadius:20,
           color:"#7c6d64",border:"1px solid #e8e0d5"}}>{unassign.length} unassigned</span>
         {selectedGuest!==null&&(<span style={{fontSize:12,padding:"3px 9px",background:"#eef2ff",borderRadius:20,
           color:"#3730a3",border:"1px solid #c7d2fe"}}>Selected: {guests.find(g=>g.id===selectedGuest)?.name}</span>)}
-        <span style={{fontSize:12,padding:"3px 9px",background:OPEN_SEATS>=0?"#f0fdf4":"#fff7ed",borderRadius:20,
-          color:OPEN_SEATS>=0?"#15803d":"#c2410c",border:OPEN_SEATS>=0?"1px solid #86efac":"1px solid #fdba74"}}>
-          {OPEN_SEATS>=0?`✓ ${RSVP_TOTAL} attending · ${TOTAL_CAP} seats (${OPEN_SEATS} open)`:`⚠ ${RSVP_TOTAL} attending · ${TOTAL_CAP} seats (${Math.abs(OPEN_SEATS)} over)`}
+        <span style={{fontSize:12,padding:"3px 9px",background:openSeats>=0?"#f0fdf4":"#fff7ed",borderRadius:20,
+          color:openSeats>=0?"#15803d":"#c2410c",border:openSeats>=0?"1px solid #86efac":"1px solid #fdba74"}}>
+          {openSeats>=0?`✓ ${RSVP_TOTAL} attending · ${totalCap} seats (${openSeats} open)`:`⚠ ${RSVP_TOTAL} attending · ${totalCap} seats (${Math.abs(openSeats)} over)`}
         </span>
         <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
           {toast&&<span style={{fontSize:12,color:"#b5945c",fontStyle:"italic"}}>{toast}</span>}
@@ -538,12 +624,12 @@ export default function SeatingChart() {
             <button onClick={()=>setSection("main")}
               style={{...BT,borderBottomColor:section==="main"?"#b5945c":"transparent",
                 fontWeight:section==="main"?600:400,color:section==="main"?"#2d2520":"#9e8e83"}}>
-              Main Floor — 22 tables
+              Main Floor — {tables.filter(t=>t.section==="main").length} tables
             </button>
             <button onClick={()=>setSection("loft")}
               style={{...BT,borderBottomColor:section==="loft"?"#b5945c":"transparent",
                 fontWeight:section==="loft"?600:400,color:section==="loft"?"#2d2520":"#9e8e83"}}>
-              Loft — 5 tables
+              Loft — {tables.filter(t=>t.section==="loft").length} tables
             </button>
           </div>
           <div style={{flex:1,overflowY:"auto",padding:12,display:"grid",
